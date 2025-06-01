@@ -1,0 +1,29 @@
+# Django y REST Framework
+Django
+djangorestframework
+djangorestframework-simplejwt
+
+# Base de datos
+psycopg2-binary
+
+# CORS para React/Flutter
+django-cors-headers
+
+# Filtrado y paginación
+django-filter
+
+# Documentación API
+drf-spectacular
+
+# Variables de entorno
+python-decouple
+
+# Validación de passwords
+django-password-validators
+
+# Timezone
+pytz
+
+# Testing (opcional)
+factory-boy
+coverage

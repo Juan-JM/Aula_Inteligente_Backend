@@ -1,0 +1,334 @@
+# apps/authentication/models.py:
+
+from django.db import models
+from django.contrib.auth.models import Group, Permission
+from django.db.models.signals import post_migrate
+from django.dispatch import receiver
+
+class RoleManager:
+    """Manager para crear roles y permisos del sistema"""
+    
+    @staticmethod
+    def create_default_groups():
+        """Crea los grupos por defecto del sistema"""
+        
+        # Crear grupos
+        admin_group, created = Group.objects.get_or_create(name='Administrador')
+        teacher_group, created = Group.objects.get_or_create(name='Docente')
+        student_group, created = Group.objects.get_or_create(name='Estudiante')
+        
+        # Permisos para Administrador (todos)
+        if created or admin_group.permissions.count() == 0:
+            admin_permissions = Permission.objects.all()
+            admin_group.permissions.set(admin_permissions)
+        
+        return admin_group, teacher_group, student_group
+
+@receiver(post_migrate)
+def create_default_groups(sender, **kwargs):
+    """Crear grupos automáticamente después de las migraciones"""
+    if sender.name == 'apps.authentication':
+        RoleManager.create_default_groups()
+
+#apps/authentication/permissions.py:
+
+from rest_framework.permissions import BasePermission
+
+class IsAdministradorOrReadOnly(BasePermission):
+    """
+    Permiso personalizado que solo permite a administradores modificar.
+    Otros usuarios solo pueden leer.
+    """
+    def has_permission(self, request, view):
+        # Permisos de lectura para usuarios autenticados
+        if request.method in ['GET', 'HEAD', 'OPTIONS']:
+            return request.user.is_authenticated
+        
+        # Permisos de escritura solo para administradores
+        return (request.user.is_authenticated and 
+                request.user.groups.filter(name='Administrador').exists())
+
+class IsAdministrador(BasePermission):
+    """
+    Solo administradores pueden acceder
+    """
+    def has_permission(self, request, view):
+        return (request.user.is_authenticated and 
+                request.user.groups.filter(name='Administrador').exists())
+
+class IsDocenteOrAdministrador(BasePermission):
+    """
+    Solo docentes y administradores pueden acceder
+    """
+    def has_permission(self, request, view):
+        return (request.user.is_authenticated and 
+                request.user.groups.filter(name__in=['Docente', 'Administrador']).exists())
+
+class IsOwnerOrAdministrador(BasePermission):
+    """
+    Solo el propietario del objeto o administrador pueden acceder
+    """
+    def has_object_permission(self, request, view, obj):
+        # Administradores tienen acceso total
+        if request.user.groups.filter(name='Administrador').exists():
+            return True
+        
+        # Verificar si el usuario es propietario del objeto
+        if hasattr(obj, 'usuario'):
+            return obj.usuario == request.user
+        
+        return False
+
+#apps/authentication/serializers.py:
+
+from rest_framework import serializers
+from django.contrib.auth.models import User, Group, Permission
+from django.contrib.auth import authenticate
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.contenttypes.models import ContentType
+
+class UserSerializer(serializers.ModelSerializer):
+    groups = serializers.StringRelatedField(many=True, read_only=True)
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_active', 'groups', 'date_joined']
+        read_only_fields = ['id', 'date_joined']
+
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+    
+    def validate(self, attrs):
+        username = attrs.get('username')
+        password = attrs.get('password')
+        
+        if username and password:
+            user = authenticate(username=username, password=password)
+            if not user:
+                raise serializers.ValidationError('Credenciales inválidas')
+            if not user.is_active:
+                raise serializers.ValidationError('Usuario inactivo')
+            attrs['user'] = user
+            return attrs
+        else:
+            raise serializers.ValidationError('Debe proporcionar username y password')
+
+class RegisterSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=8)
+    password_confirm = serializers.CharField(write_only=True)
+    grupo = serializers.CharField(write_only=True)
+    
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'first_name', 'last_name', 'password', 'password_confirm', 'grupo']
+    
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError("Las contraseñas no coinciden")
+        
+        # Validar que el grupo existe
+        grupo_nombre = attrs['grupo']
+        if not Group.objects.filter(name=grupo_nombre).exists():
+            raise serializers.ValidationError(f"El grupo '{grupo_nombre}' no existe")
+        
+        return attrs
+    
+    def create(self, validated_data):
+        # Remover campos que no van al modelo User
+        password = validated_data.pop('password')
+        validated_data.pop('password_confirm')
+        grupo_nombre = validated_data.pop('grupo')
+        
+        # Crear usuario
+        user = User.objects.create_user(password=password, **validated_data)
+        
+        # Asignar grupo
+        grupo = Group.objects.get(name=grupo_nombre)
+        user.groups.add(grupo)
+        
+        return user
+
+class TokenSerializer(serializers.Serializer):
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    user = UserSerializer()
+
+# Agregar estos serializers nuevos
+class ContentTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContentType
+        fields = ['id', 'app_label', 'model']
+
+class PermissionSerializer(serializers.ModelSerializer):
+    content_type = ContentTypeSerializer(read_only=True)
+    
+    class Meta:
+        model = Permission
+        fields = ['id', 'name', 'codename', 'content_type']
+
+class GroupSerializer(serializers.ModelSerializer):
+    permissions = PermissionSerializer(many=True, read_only=True)
+    permission_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Group
+        fields = ['id', 'name', 'permissions', 'permission_count']
+    
+    def get_permission_count(self, obj):
+        return obj.permissions.count()
+
+class UserGroupSerializer(serializers.ModelSerializer):
+    groups = GroupSerializer(many=True, read_only=True)
+    user_permissions = PermissionSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 
+                 'is_staff', 'is_active', 'groups', 'user_permissions']
+
+#apps/authentication/urls.py:
+
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
+from . import views
+# Crear el router
+router = DefaultRouter()
+router.register(r'groups', views.GroupViewSet)
+router.register(r'permissions', views.PermissionViewSet)
+router.register(r'users', views.UserGroupViewSet)
+
+urlpatterns = [
+    path('login/', views.login_view, name='login'),
+    path('register/', views.register_view, name='register'),
+    path('logout/', views.logout_view, name='logout'),
+    path('profile/', views.profile_view, name='profile'),
+    path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('', include(router.urls)),
+
+]
+
+#apps/authentication/views.py:
+
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth.models import User
+from .serializers import LoginSerializer, RegisterSerializer, UserSerializer, TokenSerializer
+# Agregar estos imports
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from django.contrib.auth.models import Group, Permission
+from .serializers import GroupSerializer, PermissionSerializer, UserGroupSerializer
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_view(request):
+    """Iniciar sesión y obtener tokens JWT"""
+    serializer = LoginSerializer(data=request.data)
+    if serializer.is_valid():
+        user = serializer.validated_data['user']
+        refresh = RefreshToken.for_user(user)
+        
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'user': UserSerializer(user).data
+        })
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register_view(request):
+    """Registrar nuevo usuario (solo administradores)"""
+    # Verificar que el usuario que hace la petición es administrador
+    if request.user.is_authenticated:
+        if not request.user.groups.filter(name='Administrador').exists():
+            return Response(
+                {'error': 'Solo administradores pueden crear usuarios'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+    else:
+        return Response(
+            {'error': 'Debe estar autenticado'}, 
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    serializer = RegisterSerializer(data=request.data)
+    if serializer.is_valid():
+        user = serializer.save()
+        return Response(
+            UserSerializer(user).data, 
+            status=status.HTTP_201_CREATED
+        )
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def logout_view(request):
+    """Cerrar sesión invalidando el refresh token"""
+    try:
+        refresh_token = request.data["refresh"]
+        token = RefreshToken(refresh_token)
+        token.blacklist()
+        return Response({'message': 'Sesión cerrada exitosamente'})
+    except Exception as e:
+        return Response({'error': 'Token inválido'}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def profile_view(request):
+    """Obtener perfil del usuario actual"""
+    return Response(UserSerializer(request.user).data)
+
+# Agregar estas nuevas clases de vista
+class GroupViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet para ver grupos y sus permisos
+    """
+    queryset = Group.objects.all()
+    serializer_class = GroupSerializer
+    permission_classes = [IsAuthenticated]
+    
+    @action(detail=True, methods=['get'])
+    def users(self, request, pk=None):
+        """Obtener usuarios de un grupo específico"""
+        group = self.get_object()
+        users = group.user_set.all()
+        serializer = UserGroupSerializer(users, many=True)
+        return Response(serializer.data)
+
+class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet para ver todos los permisos
+    """
+    queryset = Permission.objects.all()
+    serializer_class = PermissionSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = Permission.objects.all()
+        # Filtrar por app si se especifica
+        app_label = self.request.query_params.get('app', None)
+        if app_label:
+            queryset = queryset.filter(content_type__app_label=app_label)
+        return queryset
+
+class UserGroupViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet para ver usuarios y sus grupos/permisos
+    """
+    queryset = User.objects.all()
+    serializer_class = UserGroupSerializer
+    permission_classes = [IsAdminUser]  # Solo admin puede ver todos los usuarios
+    
+    @action(detail=False, methods=['get'])
+    def me(self, request):
+        """Obtener grupos y permisos del usuario actual"""
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
