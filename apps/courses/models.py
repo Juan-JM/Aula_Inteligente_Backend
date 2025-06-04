@@ -51,7 +51,7 @@ class Campo(models.Model):
         return self.nombre
 
 class Criterio(models.Model):
-    codigo = models.CharField(max_length=100, primary_key=True)
+    id = models.AutoField(primary_key=True)
     descripcion = models.CharField(max_length=100)
     codigo_campo = models.ForeignKey(Campo, on_delete=models.CASCADE, db_column='codigo_campo')
     codigo_periodo = models.ForeignKey(Periodo, on_delete=models.CASCADE, db_column='codigo_periodo')

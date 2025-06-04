@@ -272,7 +272,7 @@ class EstudianteViewSet(viewsets.ModelViewSet):
                     'docente': asignacion.ci_docente.nombre_completo,
                     'notas': [
                         {
-                            'criterio': nota.codigo_criterio.descripcion,
+                            'criterio': nota.id_criterio.descripcion,
                             'nota': float(nota.nota),
                             'fecha': nota.created_at.date()
                         } for nota in notas

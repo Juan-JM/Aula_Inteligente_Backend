@@ -64,7 +64,7 @@ class NotaViewSet(viewsets.ModelViewSet):
     serializer_class = NotaSerializer
     permission_classes = [IsAuthenticated, IsDocenteOrAdministrador]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'codigo_criterio']
+    filterset_fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'id_criterio']
     search_fields = ['ci_estudiante__nombre', 'ci_estudiante__apellido', 'codigo_materia__nombre']
     ordering = ['-created_at']
     
@@ -136,8 +136,8 @@ class NotaViewSet(viewsets.ModelViewSet):
         
         # Agrupar por materia
         materias_data = {}
-        for nota in queryset.select_related('codigo_materia', 'codigo_criterio'):
-            materia_nombre = nota.codigo_materia.nombre
+        for nota in queryset.select_related('codigo_materia', 'id_criterio'):
+            materia_nombre = nota.id_criterio.descripcion
             if materia_nombre not in materias_data:
                 materias_data[materia_nombre] = {
                     'materia': materia_nombre,
@@ -145,7 +145,7 @@ class NotaViewSet(viewsets.ModelViewSet):
                 }
             
             materias_data[materia_nombre]['notas'].append({
-                'criterio': nota.codigo_criterio.descripcion,
+                'criterio': nota.id_criterio.descripcion,
                 'nota': float(nota.nota),
                 'fecha': nota.created_at.date(),
                 'observaciones': nota.observaciones

@@ -29,8 +29,8 @@ class NotaSerializer(serializers.ModelSerializer):
     estudiante_nombre = serializers.CharField(source='ci_estudiante.nombre_completo', read_only=True)
     materia_nombre = serializers.CharField(source='codigo_materia.nombre', read_only=True)
     curso_nombre = serializers.CharField(source='codigo_curso.nombre', read_only=True)
-    criterio_descripcion = serializers.CharField(source='codigo_criterio.descripcion', read_only=True)
-    periodo_nombre = serializers.CharField(source='codigo_criterio.codigo_periodo.nombre', read_only=True)
+    criterio_descripcion = serializers.CharField(source='id_criterio.descripcion', read_only=True)
+    periodo_nombre = serializers.CharField(source='id_criterio.codigo_periodo.nombre', read_only=True)
     
     class Meta:
         model = Nota
@@ -40,7 +40,7 @@ class NotaSerializer(serializers.ModelSerializer):
 class NotaCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Nota
-        fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'codigo_criterio', 'nota', 'observaciones']
+        fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'id_criterio', 'nota', 'observaciones']
     
     def validate(self, attrs):
         # Verificar que existe el acta correspondiente
@@ -71,7 +71,7 @@ class NotaDetailSerializer(serializers.ModelSerializer):
     codigo_curso = serializers.StringRelatedField()
     codigo_materia = serializers.StringRelatedField()
     ci_estudiante = serializers.StringRelatedField()
-    codigo_criterio = serializers.StringRelatedField()
+    id_criterio = serializers.StringRelatedField()
     acta_info = serializers.SerializerMethodField()
     
     class Meta:

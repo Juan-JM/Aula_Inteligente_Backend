@@ -32,7 +32,7 @@ class Nota(models.Model):
     codigo_curso = models.ForeignKey('courses.Curso', on_delete=models.CASCADE, db_column='codigo_curso')
     codigo_materia = models.ForeignKey('subjects.Materia', on_delete=models.CASCADE, db_column='codigo_materia')
     ci_estudiante = models.ForeignKey('students.Estudiante', on_delete=models.CASCADE, db_column='ci_estudiante')
-    codigo_criterio = models.ForeignKey('courses.Criterio', on_delete=models.CASCADE, db_column='codigo_criterio')
+    id_criterio = models.ForeignKey('courses.Criterio', on_delete=models.CASCADE, db_column='id_criterio')
     nota = models.DecimalField(
         max_digits=5, 
         decimal_places=2,
@@ -47,7 +47,7 @@ class Nota(models.Model):
         db_table = 'nota'
         verbose_name = 'Nota'
         verbose_name_plural = 'Notas'
-        unique_together = ('codigo_curso', 'codigo_materia', 'ci_estudiante', 'codigo_criterio')
+        unique_together = ('codigo_curso', 'codigo_materia', 'ci_estudiante', 'id_criterio')
         
     def __str__(self):
         return f"{self.ci_estudiante.nombre_completo} - {self.codigo_materia.nombre}: {self.nota}"
