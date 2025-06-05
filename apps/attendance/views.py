@@ -1,4 +1,4 @@
-#apps/attendance/views.py:
+# apps/attendance/views.py
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -12,7 +12,8 @@ from datetime import date, timedelta
 from .models import Asistencia
 from .serializers import (
     AsistenciaSerializer, AsistenciaCreateSerializer, 
-    AsistenciaMasivaSerializer, EstadisticasAsistenciaSerializer
+    AsistenciaMasivaSerializer, EstadisticasAsistenciaSerializer,
+    EstadisticasDetalladasSerializer
 )
 from apps.authentication.permissions import IsDocenteOrAdministrador
 
@@ -21,7 +22,7 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
     serializer_class = AsistenciaSerializer
     permission_classes = [IsAuthenticated, IsDocenteOrAdministrador]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'fecha', 'asistio']
+    filterset_fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'fecha', 'estado']
     search_fields = ['ci_estudiante__nombre', 'ci_estudiante__apellido']
     ordering = ['-fecha', 'codigo_curso', 'ci_estudiante']
     
@@ -113,15 +114,17 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
                     from apps.courses.models import Curso
                     from apps.subjects.models import Materia
                     
-                    estudiante = Estudiante.objects.get(ci=estudiante_data['ci'])
+                    # ✅ CORREGIR: usar 'ci_estudiante' en lugar de 'ci'
+                    estudiante = Estudiante.objects.get(ci=estudiante_data['ci_estudiante'])
                     curso = Curso.objects.get(codigo=data['codigo_curso'])
                     materia = Materia.objects.get(codigo=data['codigo_materia'])
                     
-                    # Convertir string a boolean si es necesario
-                    asistio = estudiante_data['asistio']
-                    if isinstance(asistio, str):
-                        asistio = asistio.lower() == 'true'
-                    
+                    estado = estudiante_data['estado']
+                    # ✅ MANEJAR CORRECTAMENTE LAS OBSERVACIONES NULAS/VACÍAS
+                    observacion = estudiante_data.get('observacion', '')
+                    if observacion == 'null' or observacion is None:
+                        observacion = ''
+                
                     # Crear o actualizar asistencia
                     asistencia, created = Asistencia.objects.update_or_create(
                         codigo_curso=curso,
@@ -129,21 +132,22 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
                         ci_estudiante=estudiante,
                         fecha=data['fecha'],
                         defaults={
-                            'asistio': asistio,
-                            'observacion': estudiante_data.get('observacion', '')
+                            'estado': estado,
+                            'observacion': observacion  
                         }
                     )
                     
                     resultados.append({
-                        'ci': estudiante_data['ci'],
+                        'ci': estudiante_data['ci_estudiante'],  # ✅ CORREGIR: usar 'ci_estudiante'
                         'nombre': estudiante.nombre_completo,
-                        'asistio': asistio,
+                        'estado': estado,
+                        'estado_display': asistencia.get_estado_display(),
                         'accion': 'creado' if created else 'actualizado'
                     })
                     
                 except Exception as e:
                     errores.append({
-                        'ci': estudiante_data['ci'],
+                        'ci': estudiante_data['ci_estudiante'],  # ✅ CORREGIR: usar 'ci_estudiante'
                         'error': str(e)
                     })
         
@@ -181,11 +185,20 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
         if fecha_fin:
             queryset = queryset.filter(fecha__lte=fecha_fin)
         
-        # Calcular estadísticas
+        # Calcular estadísticas detalladas
         total_clases = queryset.count()
-        asistencias = queryset.filter(asistio=True).count()
-        ausencias = total_clases - asistencias
-        porcentaje = (asistencias / total_clases * 100) if total_clases > 0 else 0
+        stats = {
+            'total_clases': total_clases,
+            'presente': queryset.filter(estado='presente').count(),
+            'ausente': queryset.filter(estado='ausente').count(),
+            'tardanza': queryset.filter(estado='tardanza').count(),
+            'justificado': queryset.filter(estado='justificado').count(),
+        }
+        
+        # Calcular porcentaje de asistencia efectiva (presente + tardanza)
+        asistencias_efectivas = stats['presente'] + stats['tardanza']
+        porcentaje = (asistencias_efectivas / total_clases * 100) if total_clases > 0 else 0
+        stats['porcentaje_asistencia'] = round(porcentaje, 2)
         
         # Agrupar por materia
         materias_data = {}
@@ -194,14 +207,34 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
             if materia_nombre not in materias_data:
                 materias_data[materia_nombre] = {
                     'materia': materia_nombre,
-                    'registros': []
+                    'registros': [],
+                    'estadisticas': {
+                        'presente': 0,
+                        'ausente': 0,
+                        'tardanza': 0,
+                        'justificado': 0
+                    }
                 }
             
             materias_data[materia_nombre]['registros'].append({
                 'fecha': asistencia.fecha,
-                'asistio': asistencia.asistio,
+                'estado': asistencia.estado,
+                'estado_display': asistencia.get_estado_display(),
                 'observacion': asistencia.observacion
             })
+            
+            # Incrementar contador de estadísticas por materia
+            materias_data[materia_nombre]['estadisticas'][asistencia.estado] += 1
+        
+        # Calcular porcentaje por materia
+        for materia_data in materias_data.values():
+            stats_materia = materia_data['estadisticas']
+            total_materia = sum(stats_materia.values())
+            if total_materia > 0:
+                asistencias_materia = stats_materia['presente'] + stats_materia['tardanza']
+                stats_materia['porcentaje_asistencia'] = round((asistencias_materia / total_materia) * 100, 2)
+            else:
+                stats_materia['porcentaje_asistencia'] = 0
         
         return Response({
             'estudiante': ci_estudiante,
@@ -209,12 +242,7 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
                 'fecha_inicio': fecha_inicio,
                 'fecha_fin': fecha_fin
             },
-            'resumen': {
-                'total_clases': total_clases,
-                'asistencias': asistencias,
-                'ausencias': ausencias,
-                'porcentaje_asistencia': round(porcentaje, 2)
-            },
+            'resumen_general': stats,
             'por_materia': list(materias_data.values())
         })
     
@@ -232,24 +260,130 @@ class AsistenciaViewSet(viewsets.ModelViewSet):
         if codigo_materia:
             queryset = queryset.filter(codigo_materia=codigo_materia)
         
-        # Estadísticas del día
+        # Estadísticas del día por estado
         stats = queryset.aggregate(
             total_registros=Count('id'),
-            presentes=Count('id', filter=Q(asistio=True)),
-            ausentes=Count('id', filter=Q(asistio=False))
+            presente=Count('id', filter=Q(estado='presente')),
+            ausente=Count('id', filter=Q(estado='ausente')),
+            tardanza=Count('id', filter=Q(estado='tardanza')),
+            justificado=Count('id', filter=Q(estado='justificado'))
         )
         
-        porcentaje_asistencia = 0
+        # Calcular porcentajes
         if stats['total_registros'] > 0:
-            porcentaje_asistencia = (stats['presentes'] / stats['total_registros']) * 100
+            asistencias_efectivas = stats['presente'] + stats['tardanza']
+            stats['porcentaje_asistencia'] = round((asistencias_efectivas / stats['total_registros']) * 100, 2)
+            stats['porcentaje_presente'] = round((stats['presente'] / stats['total_registros']) * 100, 2)
+            stats['porcentaje_ausente'] = round((stats['ausente'] / stats['total_registros']) * 100, 2)
+            stats['porcentaje_tardanza'] = round((stats['tardanza'] / stats['total_registros']) * 100, 2)
+            stats['porcentaje_justificado'] = round((stats['justificado'] / stats['total_registros']) * 100, 2)
+        else:
+            stats.update({
+                'porcentaje_asistencia': 0,
+                'porcentaje_presente': 0,
+                'porcentaje_ausente': 0,
+                'porcentaje_tardanza': 0,
+                'porcentaje_justificado': 0
+            })
         
         return Response({
             'fecha': fecha,
-            'estadisticas': {
-                'total_registros': stats['total_registros'],
-                'presentes': stats['presentes'],
-                'ausentes': stats['ausentes'],
-                'porcentaje_asistencia': round(porcentaje_asistencia, 2)
+            'filtros': {
+                'codigo_curso': codigo_curso,
+                'codigo_materia': codigo_materia
             },
+            'estadisticas': stats,
             'registros': AsistenciaSerializer(queryset, many=True).data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def estadisticas_curso(self, request):
+        """Obtener estadísticas de asistencia por curso"""
+        codigo_curso = request.query_params.get('codigo_curso')
+        codigo_materia = request.query_params.get('codigo_materia')
+        fecha_inicio = request.query_params.get('fecha_inicio')
+        fecha_fin = request.query_params.get('fecha_fin')
+        
+        if not codigo_curso:
+            return Response(
+                {'error': 'codigo_curso es requerido'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        queryset = self.get_queryset().filter(codigo_curso=codigo_curso)
+        
+        if codigo_materia:
+            queryset = queryset.filter(codigo_materia=codigo_materia)
+        if fecha_inicio:
+            queryset = queryset.filter(fecha__gte=fecha_inicio)
+        if fecha_fin:
+            queryset = queryset.filter(fecha__lte=fecha_fin)
+        
+        # Estadísticas generales del curso
+        stats_generales = queryset.aggregate(
+            total_registros=Count('id'),
+            presente=Count('id', filter=Q(estado='presente')),
+            ausente=Count('id', filter=Q(estado='ausente')),
+            tardanza=Count('id', filter=Q(estado='tardanza')),
+            justificado=Count('id', filter=Q(estado='justificado'))
+        )
+        
+        # Calcular porcentajes
+        if stats_generales['total_registros'] > 0:
+            total = stats_generales['total_registros']
+            asistencias_efectivas = stats_generales['presente'] + stats_generales['tardanza']
+            stats_generales['porcentaje_asistencia'] = round((asistencias_efectivas / total) * 100, 2)
+        else:
+            stats_generales['porcentaje_asistencia'] = 0
+        
+        # Estadísticas por estudiante
+        estudiantes_stats = []
+        estudiantes_ids = queryset.values_list('ci_estudiante', flat=True).distinct()
+        
+        for estudiante_id in estudiantes_ids:
+            estudiante_queryset = queryset.filter(ci_estudiante=estudiante_id)
+            estudiante_obj = estudiante_queryset.first().ci_estudiante
+            
+            estudiante_stats = estudiante_queryset.aggregate(
+                total_clases=Count('id'),
+                presente=Count('id', filter=Q(estado='presente')),
+                ausente=Count('id', filter=Q(estado='ausente')),
+                tardanza=Count('id', filter=Q(estado='tardanza')),
+                justificado=Count('id', filter=Q(estado='justificado'))
+            )
+            
+            if estudiante_stats['total_clases'] > 0:
+                asistencias_efectivas = estudiante_stats['presente'] + estudiante_stats['tardanza']
+                porcentaje = (asistencias_efectivas / estudiante_stats['total_clases']) * 100
+                estudiante_stats['porcentaje_asistencia'] = round(porcentaje, 2)
+            else:
+                estudiante_stats['porcentaje_asistencia'] = 0
+            
+            estudiantes_stats.append({
+                'estudiante': {
+                    'ci': estudiante_obj.ci,
+                    'nombre': estudiante_obj.nombre_completo
+                },
+                'estadisticas': estudiante_stats
+            })
+        
+        return Response({
+            'curso': codigo_curso,
+            'materia': codigo_materia,
+            'periodo': {
+                'fecha_inicio': fecha_inicio,
+                'fecha_fin': fecha_fin
+            },
+            'estadisticas_generales': stats_generales,
+            'estudiantes': estudiantes_stats
+        })
+    
+    @action(detail=False, methods=['get'])
+    def estados_disponibles(self, request):
+        """Obtener lista de estados disponibles para asistencia"""
+        return Response({
+            'estados': [
+                {'valor': choice[0], 'etiqueta': choice[1]} 
+                for choice in Asistencia.ESTADO_CHOICES
+            ]
         })

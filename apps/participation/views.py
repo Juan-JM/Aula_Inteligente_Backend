@@ -7,10 +7,11 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Avg, Count, Q
+from django.db import transaction
 from .models import Participacion
 from .serializers import (
     ParticipacionSerializer, ParticipacionCreateSerializer, 
-    EstadisticasParticipacionSerializer
+    ParticipacionBulkCreateSerializer, EstadisticasParticipacionSerializer
 )
 from apps.authentication.permissions import IsDocenteOrAdministrador
 
@@ -26,6 +27,8 @@ class ParticipacionViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return ParticipacionCreateSerializer
+        elif self.action == 'registro_masivo':
+            return ParticipacionBulkCreateSerializer
         return ParticipacionSerializer
     
     def get_queryset(self):
@@ -65,11 +68,46 @@ class ParticipacionViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         """Solo docentes y administradores pueden crear/modificar participación"""
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'registro_masivo']:
             permission_classes = [IsAuthenticated, IsDocenteOrAdministrador]
         else:
             permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
+    
+    @action(detail=False, methods=['post'])
+    def registro_masivo(self, request):
+        """Registrar múltiples participaciones de una vez"""
+        serializer = self.get_serializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response(
+                {'error': 'Datos inválidos', 'details': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                participaciones_data = serializer.validated_data['participaciones']
+                participaciones_creadas = []
+                
+                for participacion_data in participaciones_data:
+                    participacion = Participacion.objects.create(**participacion_data)
+                    participaciones_creadas.append(participacion)
+                
+                # Serializar las participaciones creadas para la respuesta
+                response_serializer = ParticipacionSerializer(participaciones_creadas, many=True)
+                
+                return Response({
+                    'message': f'Se registraron {len(participaciones_creadas)} participaciones exitosamente',
+                    'participaciones_creadas': len(participaciones_creadas),
+                    'participaciones': response_serializer.data
+                }, status=status.HTTP_201_CREATED)
+                
+        except Exception as e:
+            return Response(
+                {'error': f'Error al crear las participaciones: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=False, methods=['get'])
     def por_estudiante(self, request):

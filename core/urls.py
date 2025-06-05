@@ -16,7 +16,8 @@ urlpatterns = [
     path('api/attendance/', include('apps.attendance.urls')),
     path('api/participation/', include('apps.participation.urls')),
     path('api/tutors/', include('apps.tutors.urls')),
-    
+    path('api/predictions/', include('apps.predictions.urls')),  # ✅ Nueva app
+
     # API Documentation
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),

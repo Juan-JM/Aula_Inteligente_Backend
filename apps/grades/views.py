@@ -64,7 +64,14 @@ class NotaViewSet(viewsets.ModelViewSet):
     serializer_class = NotaSerializer
     permission_classes = [IsAuthenticated, IsDocenteOrAdministrador]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['codigo_curso', 'codigo_materia', 'ci_estudiante', 'id_criterio']
+    filterset_fields = [
+        'codigo_curso', 
+        'codigo_materia', 
+        'ci_estudiante', 
+        'id_criterio',
+        'id_criterio__codigo_campo',  # Filtro por campo
+        'id_criterio__codigo_periodo'  # Filtro por periodo
+    ]
     search_fields = ['ci_estudiante__nombre', 'ci_estudiante__apellido', 'codigo_materia__nombre']
     ordering = ['-created_at']
     
@@ -210,3 +217,67 @@ class NotaViewSet(viewsets.ModelViewSet):
         
         resultados = []
         errores = []
+        for i, nota_data in enumerate(notas_data):
+            try:
+                # Validar datos requeridos
+                if not all(key in nota_data for key in ['ci_estudiante', 'codigo_curso', 'codigo_materia', 'id_criterio', 'nota']):
+                    errores.append({
+                        'indice': i,
+                        'error': 'Faltan campos requeridos: ci_estudiante, codigo_curso, codigo_materia, id_criterio, nota'
+                    })
+                    continue
+                
+                # Crear serializer con los datos
+                serializer = NotaCreateSerializer(data=nota_data)
+                if serializer.is_valid():
+                    # Verificar permisos del docente para esta materia/curso
+                    if request.user.groups.filter(name='Docente').exists():
+                        from apps.teachers.models import Docente, AsignacionCurso
+                        try:
+                            docente = Docente.objects.get(usuario=request.user)
+                            asignacion = AsignacionCurso.objects.filter(
+                                ci_docente=docente,
+                                codigo_curso=nota_data['codigo_curso'],
+                                codigo_materia=nota_data['codigo_materia'],
+                                is_active=True
+                            ).exists()
+                            
+                            if not asignacion:
+                                errores.append({
+                                    'indice': i,
+                                    'error': 'No tiene permisos para registrar notas en esta materia/curso'
+                                })
+                                continue
+                        except Docente.DoesNotExist:
+                            errores.append({
+                                'indice': i,
+                                'error': 'Docente no encontrado'
+                            })
+                            continue
+                    
+                    # Guardar la nota
+                    nota = serializer.save()
+                    resultados.append({
+                        'indice': i,
+                        'id': nota.id,
+                        'mensaje': 'Nota registrada exitosamente'
+                    })
+                else:
+                    errores.append({
+                        'indice': i,
+                        'error': serializer.errors
+                    })
+                    
+            except Exception as e:
+                errores.append({
+                    'indice': i,
+                    'error': str(e)
+                })
+        
+        return Response({
+            'mensaje': f'Procesadas {len(notas_data)} notas',
+            'exitosas': len(resultados),
+            'errores': len(errores),
+            'resultados': resultados,
+            'errores_detalle': errores
+        }, status=status.HTTP_200_OK if resultados else status.HTTP_400_BAD_REQUEST)

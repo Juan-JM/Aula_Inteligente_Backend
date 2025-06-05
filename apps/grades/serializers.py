@@ -8,6 +8,7 @@ class ActaNotaSerializer(serializers.ModelSerializer):
     estudiante_nombre = serializers.CharField(source='ci_estudiante.nombre_completo', read_only=True)
     materia_nombre = serializers.CharField(source='codigo_materia.nombre', read_only=True)
     curso_nombre = serializers.CharField(source='codigo_curso.nombre', read_only=True)
+    curso_paralelo=serializers.CharField(source='codigo_curso.paralelo', read_only=True)
     promedio_notas = serializers.SerializerMethodField()
     
     class Meta:
@@ -29,8 +30,13 @@ class NotaSerializer(serializers.ModelSerializer):
     estudiante_nombre = serializers.CharField(source='ci_estudiante.nombre_completo', read_only=True)
     materia_nombre = serializers.CharField(source='codigo_materia.nombre', read_only=True)
     curso_nombre = serializers.CharField(source='codigo_curso.nombre', read_only=True)
+    curso_paralelo=serializers.CharField(source='codigo_curso.paralelo', read_only=True)
     criterio_descripcion = serializers.CharField(source='id_criterio.descripcion', read_only=True)
     periodo_nombre = serializers.CharField(source='id_criterio.codigo_periodo.nombre', read_only=True)
+        # Nuevos campos agregados:
+    campo_nombre = serializers.CharField(source='id_criterio.codigo_campo.nombre', read_only=True)
+    campo_codigo = serializers.CharField(source='id_criterio.codigo_campo.codigo', read_only=True)
+    periodo_codigo = serializers.CharField(source='id_criterio.codigo_periodo.codigo', read_only=True)
     
     class Meta:
         model = Nota

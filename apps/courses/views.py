@@ -48,7 +48,12 @@ class CursoViewSet(viewsets.ModelViewSet):
                 'fecha_inscripcion': inscripcion.fecha_inscripcion
             })
         
-        return Response(estudiantes_data)
+        response_data = {   
+            'cantidad_estudiantes': len(estudiantes_data),
+            'estudiantes': estudiantes_data
+        }
+        
+        return Response(response_data)
 
 class PeriodoViewSet(viewsets.ModelViewSet):
     queryset = Periodo.objects.filter(is_active=True)
